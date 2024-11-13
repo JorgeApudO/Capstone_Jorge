@@ -46,8 +46,7 @@ def inverse_kinematics(dimension: int, info: dict):
     
 def inverse_kinematics_2D(info: dict):
 
-    pose_deseada = info["pose_deseada"]
-    actual_pose = info["actual_pose"]
+    pose_deseada = np.array([info["pose_deseada"][0], info["pose_deseada"][1]])
     actual_q1 = info["q1"]
     actual_q2 = info["q2"]
     precision = info["precision"]
@@ -55,6 +54,7 @@ def inverse_kinematics_2D(info: dict):
 
     #Calcula la cinematica inversa del brazo robotico
     #pose_deseada: Posicion deseada del extremo del brazo
+    actual_pose = pose_calc(2, info)
     Error = pose_deseada - actual_pose
     dist = distance(actual_pose, pose_deseada)
 
@@ -66,8 +66,8 @@ def inverse_kinematics_2D(info: dict):
 
         J = Jacobian_inv(New_q1, New_q2)
         correction = np.dot(J, Error)
-        New_q1 = correction[0] + New_q1
-        New_q2 = correction[1] + New_q2
+        New_q1 += correction[0]
+        New_q2 += correction[1]
 
         pos_info["q1"] = New_q1
         pos_info["q2"] = New_q2
@@ -83,7 +83,36 @@ def inverse_kinematics_2D(info: dict):
 
 def inverse_kinematics_3D(info: dict):
 
-    pass
+    pos_2d = inverse_kinematics_2D(info)
+    q1 = pos_2d[0]
+    q2 = pos_2d[1]
+    pose_deseada = info["pose_deseada"]
+    actual_z = info["z"]
+    precision = info["precision"]
+    max_steps = info["max_steps"]
+    
+    actual_pose = pose_calc(3, info)
+    Error = pose_deseada - actual_pose
+    dist = distance(actual_pose, pose_deseada)
+    New_z = actual_z
+    
+    count = 0
+    pos_info = {"q1": New_q1, "q2": New_q2, "L1": info["L1"], "L2": info["L2"], "z": New_z}
+    while dist > precision and count < max_steps:
+
+        correction = Error[2] * 0.9
+        New_z += correction
+
+        pos_info["z"] = New_z
+
+        Error = pose_deseada - pose_calc(3, pos_info)
+        dist = distance(pose_calc(3, pos_info), pose_deseada)
+        count += 1
+    
+    if dist > precision:
+        return np.array([None, None])
+        
+    return np.array([New_q1, New_q2, New_z])
 
 def pose_calc(dimension: int, info: dict):
 

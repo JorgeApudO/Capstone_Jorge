@@ -1,6 +1,6 @@
 import numpy as np
 import cv2
-from Algorithms import flip_y, Mrot, grado_a_radian, radian_a_grado
+import Algorithms
 
 
 class Brazo():
@@ -40,61 +40,11 @@ class Brazo():
     @q2.setter
     def q2(self, rad: float):
         self._q2 =  (rad - np.pi) % (2*np.pi) - np.pi
-
-    def error_function(self, pose1, pose2):
-        return np.linalg.norm(pose1 - pose2)
-
-    def pose_calc(self, q1, q2):
-        #Calcula una posicion del brazo robotico segun un q1 y q2 dados
-        x = self.L1 * np.cos(q1) + self.L2 * np.cos(q1 + q2)
-        y = self.L1 * np.sin(q1) + self.L2 * np.sin(q1 + q2)
-        return np.array([x, y])
     
     def pose(self):
         #Calcula la posicion actual del brazo robotico
-        return self.pose_calc(self.q1, self.q2)
-    
-    def Jacobian_inv(self, q1, q2):
-        #Calcula la matriz jacobiana inversa del brazo robotico
-        a = - (self.L1 * np.sin(q1) + self.L2 * np.sin(q1 + q2))
-        b = - (self.L2 * np.sin(q1 + q2))
-        c =  self.L1 * np.cos(q1) + self.L2 * np.cos(q1 + q2) 
-        d = self.L2 * np.cos(q1 + q2)
-
-        J = np.array([[a, b], [c, d]])
-        Jinv = np.linalg.pinv(J)
-        return Jinv
-
-    def inverse_kinematics(self, pose_deseada):
-
-        #Calcula la cinematica inversa del brazo robotico
-        #pose_deseada: Posicion deseada del extremo del brazo
-        Error = pose_deseada - self.pose()
-        dist = self.error_function(self.pose(), pose_deseada)
-
-        New_q1 = self.q1
-        New_q2 = self.q2
-
-        count = 0
-
-        while dist > self.precision and (not self.is_ready) and count < self.max_steps:
-
-            J = self.Jacobian_inv(New_q1, New_q2)
-            correction = np.dot(J, Error)
-            New_q1 = correction[0] + New_q1
-            New_q2 = correction[1] + New_q2
-
-            Error = pose_deseada - self.pose_calc(New_q1, New_q2)
-            dist = self.error_function(self.pose_calc(New_q1, New_q2), pose_deseada)
-            count += 1
-
-            if count % 10000 == 0:
-                print(f"Error: {Error}, Iteracion: {count}")
-
-        if dist > self.precision:
-            return np.array([None, None])
-
-        return np.array([New_q1, New_q2])
+        info = {"q1": self.q1, "q2": self.q2}
+        return pose_calc(2, info)
     
 class Ojos():
 
@@ -108,9 +58,6 @@ class Ojos():
 
         self.center = np.array([Image_X/2, Image_Y/2]) #Centro de la imagen
         self.sensor = 0 #Altura medida por el sensor
-
-    def error_function(self, pose1, pose2):
-        return np.linalg.norm(pose1 - pose2)
     
     def find_objective(self):
         #Calcula la posicion del objetivo en la imagen
@@ -149,26 +96,22 @@ class Ojos():
 
 class Robot():
 
-    def __init__(self, brazo: Brazo, ojos: Ojos, precision: float, height: float, screw_thread: float , max_steps = 100000):
+    def __init__(self, brazo: Brazo, ojos: Ojos, precision: float, height: float , max_steps = 100000):
 
         self.brazo = brazo #Instancia de la clase Brazo
         self.ojos = ojos
         self.precision = precision #Precision de la solucion
         self.max_steps = max_steps #Maximo numero de iteraciones para calcular la posicion
-        self.height = height #Altura del extremo efector robotico
-        self.screw_thread = screw_thread #Paso de rosca del tornillo
-        self.q3 = self.height / self.screw_thread #Angulo de la altura del robot, q3 = 0 es en brazo z=0
-        self.is_ready = False #Indica si el brazo tocó el punto deseado
+        self.pencil_height = height #Altura del lapiz efector
+        self.z = self.height / self.screw_thread #Angulo de la altura del robot, q3 = 0 es en brazo z=0
+        self.touch = False #Indica si el brazo tocó el punto deseado
         #Permite cerrar el lazo de control visualmente/contacto y no solo por posición estimada
-
-    def pose_calc(self, q1, q2, q3):
-
-        #Calcula una posicion del extremo efector segun un q1, q2 y q3 dados
-        pose = self.brazo.pose_calc(q1, q2)
-        return np.array([pose[0], pose[1], q3 * self.screw_thread - self.height])
+        self.finised = False
+         
     
     def pose(self):
-        return self.pose_calc(self.brazo.q1, self.brazo.q2, self.q3)
+        info = {"q1": self.brazo.q1, "q2": self.brazo.q2, }
+        return pose_calc(self.brazo.q1, self.brazo.q2, self.q3)
     
     def error_function(self, pose1, pose2):
         return np.linalg.norm(pose1 - pose2)
