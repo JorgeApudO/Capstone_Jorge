@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
-import Algorithms
-
+from Algorithms import pose_calc, inverse_kinematics, flip_y, find_wound, find_pencil
+import serial
 
 class Brazo():
 
@@ -9,10 +9,12 @@ class Brazo():
     #Asume que el brazo es un eslabon de longitud L1 y otro de longitud L2
     #El brazo está centrado en el origen
 
-    def __init__(self, length_1: float, length_2: float, precision: float, max_steps = 50000):
+    def __init__(self, length_1: float, length_2: float, precision: float, pencil_diff: float, camera_dist: float, max_steps = 50000):
 
         self.L1 = length_1 #Longitud del primer eslabon
         self.L2 = length_2 #Longitud del segundo eslabon
+        self.pencil_diff = pencil_diff #Distancia entre la punta del lapiz y el extremo del brazo
+        self.camera_dist = camera_dist #Distancia entre la camara y el extremo del brazo
         self.precision = precision #Precision de la solucion
 
         self._q1 = 0 #Angulo de la articulacion 1
@@ -43,132 +45,134 @@ class Brazo():
     
     def pose(self):
         #Calcula la posicion actual del brazo robotico
-        info = {"q1": self.q1, "q2": self.q2}
+        info = {"q1": self.q1, "q2": self.q2, "L1": self.L1, "L2": self.L2, "pencil_diff": self.pencil_diff, "camera_dist": self.camera_dist}
         return pose_calc(2, info)
+    
+    def get_angles(self, pose_deseada):
+
+        return inverse_kinematics(2, {"pose_deseada": pose_deseada, "L1": self.L1, "L2": self.L2, "precision": self.precision, "max_steps": self.max_steps, "q1": self.q1, "q2": self.q2, "pencil_diff": self.pencil_diff, "camera_dist": self.camera_dist})
+        
     
 class Ojos():
 
-    def __init__(self , Image_X: int, Image_Y: int):
+    def __init__(self, Image_X: int, Image_Y: int, precision: float):
 
         self.is_ready = False #Indica si el punto deseado está justo debajo
         self.MAX_X = Image_X #Ancho de la imagen
         self.MAX_Y = Image_Y #Alto de la imagen
+        self.precision = precision #Precision de la solucion visual
         self.x_values = np.arange(0, self.MAX_X) #Posibles posiciones de x en la imagen
         self.y_values = np.arange(0, self.MAX_Y) #Posibles posiciones de y en la imagen
-
         self.center = np.array([Image_X/2, Image_Y/2]) #Centro de la imagen
-        self.sensor = 0 #Altura medida por el sensor
-    
-    def find_objective(self):
-        #Calcula la posicion del objetivo en la imagen
-
-        image = self.imagen
-        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        lower_green = np.array([20, 0, 0])
-        upper_green = np.array([180, 255, 255])
-        mask = cv2.inRange(hsv, lower_green, upper_green)
-        #mask_inv = cv2.bitwise_not(mask)
-        filtered_image = cv2.bitwise_and(image, image, mask=mask)
-        filtered_image = cv2.cvtColor(filtered_image, cv2.COLOR_HSV2BGR)
-        filtered_image = cv2.cvtColor(filtered_image, cv2.COLOR_BGR2GRAY)
-        cv2.imshow("Filtro", filtered_image)
-        cv2.waitKey(0)
-
-        filtered_image_array = np.array(filtered_image)
-        filtered_image_array = filtered_image_array / 255
-        print(filtered_image_array.shape)
-        object_array = np.zeros((self.MAX_X, self.MAX_Y, 3))
-        for i in range(self.MAX_X):
-            for j in range(self.MAX_Y):
-                object_array[i, j] = np.array([self.x_values[i], self.y_values[j], filtered_image_array[j, i]])
         
-        average_x = np.average(object_array[:, :, 0], weights=object_array[:, :, 2])
-        average_y = np.average(object_array[:, :, 1], weights=object_array[:, :, 2])
-        point_center = np.array([average_x, average_y])
+    
+    def find_wound_pixel(self, imagen):
+        #Calcula la posicion del objetivo en la imagen en pixeles
+        info = {"MAX_X": self.MAX_X, "MAX_Y": self.MAX_Y, "x_values": self.x_values, "y_values": self.y_values}
+        return find_wound(imagen, info)
 
-        return point_center
-
-    def get_image(self, imagen):
+    def get_image_file(self, imagen, show = False):
 
         self.imagen = cv2.imread(imagen)
-        cv2.imshow("Imagen", self.imagen)
-        cv2.waitKey(0)
+        if show:
+            cv2.imshow("Imagen", self.imagen)
+            cv2.waitKey(0)
+
+    def find_pencil_pixel(self, imagen):
+
+        info = {"MAX_X": self.MAX_X, "MAX_Y": self.MAX_Y, "x_values": self.x_values, "y_values": self.y_values, "center": self.center}
+        return find_pencil(imagen, info)
+
+class Comunicacion():
+
+    def __init__(self, Tx: int, Rx: int, usb_port: str, timeout : float):
+
+        self.port = usb_port #Puerto USB de la camara
+        self.baudrate = 9600 #Baudrate esp32
+        self.Tx = Tx #Puerto Tx de la Raspberry
+        self.Rx = Rx #Puerto Rx de la Raspberry
+        self.timeout = timeout #Tiempo de espera para la comunicacion
+        self.ser = serial.Serial(self.port, self.baudrate, timeout = self.timeout) #Instancia del puerto serial 
+
+    def send_data_gpio(self, data):
+
+        message = data + "\r\n"
+        message = message.encode("utf-8")
+        return self.ser.write(message)
+    
+    def read_data_gpio(self):
+
+        message = self.ser.readline().decode("utf-8")
+        #Hay que definir un sistema de mensajes para la comunicacion para los encoders y sensores de distancia
+        print(message)
+
+    def read_usb(self):
+
+        #Metodo para leer la camara, tengo que ver como está en la raspberry
+        pass
+
+    def send_motor_data(self, data):
+
+        q1 = data[0]
+        q2 = data[1]
+        z = data[2]
+        message = f"{q1},{q2},{z}"
+        self.send_data_gpio(message)
+
 
 class Robot():
 
-    def __init__(self, brazo: Brazo, ojos: Ojos, precision: float, height: float , max_steps = 100000):
+    def __init__(self, brazo: Brazo, ojos: Ojos, comunicacion: Comunicacion, precision: float, height: float, screw_thread : float , max_steps = 100000):
 
         self.brazo = brazo #Instancia de la clase Brazo
-        self.ojos = ojos
+        self.ojos = ojos #Instancia de la clase Ojos
+        self.comunicacion = comunicacion #Instancia de la clase Comunicacion
         self.precision = precision #Precision de la solucion
         self.max_steps = max_steps #Maximo numero de iteraciones para calcular la posicion
         self.pencil_height = height #Altura del lapiz efector
-        self.z = self.height / self.screw_thread #Angulo de la altura del robot, q3 = 0 es en brazo z=0
-        self.touch = False #Indica si el brazo tocó el punto deseado
+        self.screw_thread = screw_thread #Distancia que avanza el tornillo por cada vuelta
+        self.z = 0 #Altura del brazo
+        self.touch = False #Indica si el brazo tocó el punto deseado dentro de una rutina
         #Permite cerrar el lazo de control visualmente/contacto y no solo por posición estimada
         self.finised = False
          
     
     def pose(self):
-        info = {"q1": self.brazo.q1, "q2": self.brazo.q2, }
-        return pose_calc(self.brazo.q1, self.brazo.q2, self.q3)
+        info = {"q1": self.brazo.q1, "q2": self.brazo.q2, "L1": self.brazo.L1, "L2": self.brazo.L2, "pencil_diff": self.brazo.pencil_diff, "camera_dist": self.brazo.camera_dist}
+        return pose_calc(3, info)
     
-    def error_function(self, pose1, pose2):
-        return np.linalg.norm(pose1 - pose2)
+    def get_state(self, pose_deseada):
+        return inverse_kinematics({"pose_deseada": pose_deseada, "L1": self.brazo.L1, "L2": self.brazo.L2, "precision": self.precision, "max_steps": self.max_steps, "q1": self.brazo.q1, "q2": self.brazo.q2, "pencil_diff": self.brazo.pencil_diff, "camera_dist": self.brazo.camera_dist, "height": self.pencil_height, "pencil_height": self.pencil_height})
     
-    def inverse_kinematics(self, pose_deseada):
-        #Calcula la cinematica inversa del brazo robotico
-        #pose_deseada: Posicion deseada del extremo del brazo
-        
-        new_q1q2 =  self.brazo.inverse_kinematics(pose_deseada[:2])
-        if new_q1q2[0] is None:
-            return np.array([None, None, None])
-        New_q1 = new_q1q2[0]
-        New_q2 = new_q1q2[1]
-        
-        dist = self.error_function(self.pose(), pose_deseada)
-        Error = pose_deseada - self.pose()
-        New_q3 = self.q3
-        count = 0
+    def pixel_to_dist_estimation(self, pixel_positions):
 
-        while dist > self.precision and count < self.max_steps and (not self.is_ready):
+        #Estima la distancia real de los pixeles de una imagen
+        dist_pixel = np.linalg.norm(pixel_positions[0] - pixel_positions[1])
+        center_point = (pixel_positions[1] + pixel_positions[0]) // 2
 
-            New_q3 = 0.25*Error[2]/self.screw_thread + New_q3
+        angle = 1 #termino mañana
 
-            dist = self.error_function(self.pose_calc(New_q1, New_q2, New_q3), pose_deseada)
-            count += 1
-            Error = pose_deseada - self.pose_calc(New_q1, New_q2, New_q3)
 
-        if dist > self.precision:
-            return np.array([None, None, None])
-        return np.array([New_q1, New_q2, New_q3])
-    
     def center_wound(self):
 
         #Centra la herida en la vista de la camara
-        pixel_wound = self.ojos.find_objective()
+        image = self.comunicacion.read_usb()
+        pixel_wound = self.ojos.find_wound_pixel(image)
         pixel_objective = self.ojos.center
 
-        distance = self.ojos.error_function(pixel_wound, pixel_objective)
+        distance = np.linalg.norm(pixel_wound - pixel_objective)
         move_vector = pixel_wound - pixel_objective
         move_vector = flip_y(move_vector)
 
         while distance > self.ojos.precision:
-
-            print(f"Distance: {distance}")
-
-
-
-
-
-
             
-    
+            desired_pose = self.pose() + move_vector * self.pixel_to_dist_estimation([pixel_wound, pixel_objective])
+            self.get_state
+            pass
+
+
 
     
 if __name__ == "__main__":
 
-    ojo = Ojos(0.1, 174, 386)
-    ojo.get_image("corte_2.jpg")
-    ojo.find_objective()
-    print("Done")
+    print("Hello World")
